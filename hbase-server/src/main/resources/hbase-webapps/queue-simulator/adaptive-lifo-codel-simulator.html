@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>AdaptiveLifoCoDelCallQueue Simulator</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --panel2: #1f232c;
+    --border: #2a2f3a;
+    --text: #e6e8ee;
+    --muted: #8b92a0;
+    --accent: #4aa8ff;
+    --green: #3ecf8e;
+    --yellow: #e9c46a;
+    --red: #ff5a5f;
+    --blue: #4aa8ff;
+    --purple: #b084ff;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 13px;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    gap: 12px;
+    padding: 12px;
+    min-height: 100vh;
+  }
+  .controls {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    position: sticky;
+    top: 12px;
+    align-self: start;
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+  }
+  .viz {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  h1 { font-size: 16px; margin: 0 0 8px 0; }
+  h2 { font-size: 13px; margin: 12px 0 6px 0; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
+  h3 { font-size: 12px; margin: 0 0 8px 0; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .row { display: flex; justify-content: space-between; align-items: center; margin: 6px 0; gap: 8px; }
+  .row label { flex: 0 0 auto; color: var(--muted); font-size: 12px; }
+  .row .value { font-variant-numeric: tabular-nums; color: var(--text); min-width: 50px; text-align: right; font-size: 12px; }
+  input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+  input[type=radio] { accent-color: var(--accent); }
+  .radio-group { display: flex; gap: 8px; margin: 4px 0; flex-wrap: wrap; }
+  .radio-group label { color: var(--text); font-size: 12px; cursor: pointer; }
+  button {
+    background: var(--panel2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 12px;
+    margin-right: 4px;
+  }
+  button:hover { background: #2a2f3a; }
+  button.primary { background: var(--accent); color: #000; border-color: var(--accent); }
+  button.primary:hover { background: #6bb8ff; }
+  button.danger { background: var(--red); color: #fff; border-color: var(--red); }
+  .timewarp { display: flex; gap: 4px; }
+  .timewarp button { flex: 1; padding: 4px 6px; }
+  .timewarp button.active { background: var(--accent); color: #000; border-color: var(--accent); }
+
+  /* Queue strip */
+  #queueStripCanvas { width: 100%; height: 80px; display: block; background: #0b0d12; border-radius: 4px; }
+  #handlerCanvas { width: 100%; height: 40px; display: block; background: #0b0d12; border-radius: 4px; margin-top: 8px; }
+  #tsCanvas { width: 100%; height: 360px; display: block; background: #0b0d12; border-radius: 4px; }
+
+  .status-row {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+  }
+  .chip {
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .chip.mode-fifo .dot { background: var(--green); }
+  .chip.mode-lifo .dot { background: var(--red); }
+  .chip.overload-yes .dot { background: var(--red); }
+  .chip.overload-no .dot { background: var(--green); }
+
+  .counters {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .counter {
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+  }
+  .counter .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .counter .value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .counter .value.green { color: var(--green); }
+  .counter .value.red { color: var(--red); }
+  .counter .value.yellow { color: var(--yellow); }
+  .counter .value.blue { color: var(--blue); }
+  .counter .value.purple { color: var(--purple); }
+
+  .legend { font-size: 11px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .legend .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; padding: 4px 0; }
+  #eventLog {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--muted);
+    max-height: 160px;
+    overflow-y: auto;
+    background: #0b0d12;
+    border-radius: 4px;
+    padding: 6px;
+    margin-top: 4px;
+  }
+  #eventLog .evt-overload { color: var(--red); }
+  #eventLog .evt-recover { color: var(--green); }
+  #eventLog .evt-mode { color: var(--yellow); }
+
+  .hint { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+  .subtle { color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- LEFT: CONTROLS -->
+  <div class="controls">
+    <h1>CoDel + Adaptive LIFO Simulator</h1>
+    <div class="subtle">Mirrors <code>AdaptiveLifoCoDelCallQueue</code> in Apache HBase. Drag sliders live — changes apply immediately (like <code>updateTunables</code>).</div>
+
+    <h2>Queue config</h2>
+
+    <h3>Queue type</h3>
+    <div class="radio-group">
+      <label><input type="radio" name="qtype" value="codel" checked /> CoDel + Adaptive LIFO</label>
+      <label><input type="radio" name="qtype" value="fifo" /> Plain FIFO</label>
+    </div>
+    <div class="hint">Plain FIFO disables CoDel drops and LIFO switching — requests always come out head-first and only overflow rejection happens.</div>
+
+    <div class="row">
+      <label>Hard capacity (fixed)</label>
+      <div class="value" id="vHardCap">250</div>
+    </div>
+    <div class="hint">Hard cap is pinned at <code>DEFAULT_CALL_QUEUE_SIZE_HARD_LIMIT = 250</code> (see <code>RpcExecutor.java:59</code>). <code>offer()</code> rejects when full.</div>
+
+    <div class="row">
+      <label>Soft limit (currentQueueLimit)</label>
+      <input type="range" id="cSoftLimit" min="1" max="250" value="100" step="1" />
+      <div class="value" id="vSoftLimit">100</div>
+    </div>
+    <div class="hint">LIFO kicks in when <code>size / softLimit &gt; lifoThreshold</code>.</div>
+
+    <div class="row">
+      <label>codelTargetDelay (ms)</label>
+      <input type="range" id="cTarget" min="1" max="200" value="5" step="1" />
+      <div class="value" id="vTarget">5</div>
+    </div>
+
+    <div class="row">
+      <label>codelInterval (ms)</label>
+      <input type="range" id="cInterval" min="10" max="2000" value="100" step="10" />
+      <div class="value" id="vInterval">100</div>
+    </div>
+
+    <div class="row">
+      <label>lifoThreshold</label>
+      <input type="range" id="cLifo" min="0.1" max="1.0" value="0.8" step="0.05" />
+      <div class="value" id="vLifo">0.80</div>
+    </div>
+
+    <div class="row">
+      <label>Handler count</label>
+      <input type="range" id="cHandlers" min="1" max="200" value="30" step="1" />
+      <div class="value" id="vHandlers">30</div>
+    </div>
+
+    <h2>Traffic</h2>
+
+    <div class="row">
+      <label>Arrival rate (req/s)</label>
+      <input type="range" id="cRate" min="0" max="200" value="100" step="1" />
+      <div class="value" id="vRate">100</div>
+    </div>
+
+    <div class="row">
+      <label>Mean service (ms)</label>
+      <input type="range" id="cService" min="1" max="500" value="10" step="1" />
+      <div class="value" id="vService">10</div>
+    </div>
+
+    <h3>Arrival distribution</h3>
+    <div class="radio-group">
+      <label><input type="radio" name="dist" value="poisson" checked /> Poisson</label>
+      <label><input type="radio" name="dist" value="constant" /> Constant</label>
+      <label><input type="radio" name="dist" value="burst" /> Burst</label>
+    </div>
+
+    <div id="burstConfig" style="display:none">
+      <div class="row">
+        <label>Burst period (ms)</label>
+        <input type="range" id="cBurstPeriod" min="500" max="10000" value="3000" step="100" />
+        <div class="value" id="vBurstPeriod">3000</div>
+      </div>
+      <div class="row">
+        <label>Burst multiplier</label>
+        <input type="range" id="cBurstMult" min="1" max="20" value="5" step="1" />
+        <div class="value" id="vBurstMult">5</div>
+      </div>
+      <div class="row">
+        <label>Burst duration (ms)</label>
+        <input type="range" id="cBurstDur" min="100" max="5000" value="800" step="50" />
+        <div class="value" id="vBurstDur">800</div>
+      </div>
+    </div>
+
+    <h2>Simulation</h2>
+
+    <h3>Time warp</h3>
+    <div class="timewarp" id="timewarp">
+      <button data-warp="0.05">×0.05</button>
+      <button data-warp="0.1">×0.1</button>
+      <button data-warp="0.25">×0.25</button>
+      <button data-warp="0.5">×0.5</button>
+      <button data-warp="1" class="active">×1</button>
+      <button data-warp="2">×2</button>
+      <button data-warp="5">×5</button>
+      <button data-warp="20">×20</button>
+    </div>
+    <div class="hint">Real → sim time scale. Slow warps (×0.1, ×0.25) are useful for watching FIFO/LIFO flips as they happen. Note: CoDel's 100 ms interval means at ×0.1, overload detection takes 1 s of real time.</div>
+
+    <div style="margin-top:10px">
+      <button class="primary" id="btnStart">Start</button>
+      <button id="btnPause">Pause</button>
+      <button class="danger" id="btnReset">Reset</button>
+    </div>
+  </div>
+
+  <!-- RIGHT: VIZ -->
+  <div class="viz">
+
+    <div class="card">
+      <h3>Queue</h3>
+      <canvas id="queueStripCanvas"></canvas>
+      <div class="status-row">
+        <div class="chip" id="chipSize"><span class="dot"></span><span>Size <b id="lblSize">0</b>/<span id="lblHardCap">500</span></span></div>
+        <div class="chip" id="chipMode"><span class="dot"></span><span>Mode <b id="lblMode">FIFO</b></span></div>
+        <div class="chip" id="chipOverload"><span class="dot"></span><span>CoDel <b id="lblOverload">NORMAL</b></span></div>
+        <div class="chip"><span class="dot" style="background:var(--muted)"></span><span>minDelay <b id="lblMinDelay">—</b> ms</span></div>
+        <div class="chip"><span class="dot" style="background:var(--muted)"></span><span>SimTime <b id="lblSimTime">0</b> s</span></div>
+      </div>
+      <div class="legend">
+        <span><span class="swatch" style="background:var(--green)"></span>fresh</span>
+        <span><span class="swatch" style="background:var(--yellow)"></span>aging (≥ target)</span>
+        <span><span class="swatch" style="background:var(--red)"></span>at risk (≥ 2×target, drop candidate when overloaded)</span>
+        <span>dashed lines: LIFO threshold &amp; soft limit</span>
+      </div>
+
+      <h3 style="margin-top:14px">Handlers</h3>
+      <canvas id="handlerCanvas"></canvas>
+      <div class="legend">
+        <span><span class="swatch" style="background:var(--green)"></span>idle</span>
+        <span><span class="swatch" style="background:var(--blue)"></span>busy</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Counters</h3>
+      <div class="counters">
+        <div class="counter"><div class="label">Arrived</div><div class="value blue" id="cntArrived">0</div></div>
+        <div class="counter"><div class="label">Served</div><div class="value green" id="cntServed">0</div></div>
+        <div class="counter"><div class="label">Served / sec</div><div class="value green" id="cntServedRate">0</div></div>
+        <div class="counter"><div class="label">Capacity (req/s)</div><div class="value blue" id="cntCapacity">0</div></div>
+        <div class="counter"><div class="label">Load (arr÷cap)</div><div class="value yellow" id="cntLoad">—</div></div>
+        <div class="counter"><div class="label">Dropped (CoDel)</div><div class="value red" id="cntDropped">0</div></div>
+        <div class="counter"><div class="label">Rejected (full)</div><div class="value red" id="cntRejected">0</div></div>
+        <div class="counter"><div class="label">In queue</div><div class="value yellow" id="cntInQueue">0</div></div>
+        <div class="counter"><div class="label">LIFO switches</div><div class="value purple" id="cntLifo">0</div></div>
+        <div class="counter"><div class="label">p50 wait (ms)</div><div class="value" id="cntP50">0</div></div>
+        <div class="counter"><div class="label">p95 wait (ms)</div><div class="value" id="cntP95">0</div></div>
+        <div class="counter"><div class="label">p99 wait (ms)</div><div class="value" id="cntP99">0</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Time series (last 30s sim)</h3>
+      <canvas id="tsCanvas"></canvas>
+      <div class="legend">
+        <span><b>Top:</b></span>
+        <span><span class="swatch" style="background:var(--blue)"></span>queue size (left axis 0..hardCap)</span>
+        <span><span class="swatch" style="background:var(--green)"></span>served/sec (right axis)</span>
+        <span><span class="swatch" style="background:var(--red)"></span>drops/sec (right axis, same scale)</span>
+        <span><span class="swatch" style="background:rgba(62,207,142,0.6)"></span>capacity ref</span>
+        <span><b>Bottom:</b></span>
+        <span><span class="swatch" style="background:var(--yellow)"></span>minDelay (ms)</span>
+        <span><span class="swatch" style="background:#666"></span>target &amp; 2×target refs</span>
+        <span><span class="swatch" style="background:rgba(255,90,95,0.15)"></span>LIFO band</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <details open>
+        <summary>Event log</summary>
+        <div id="eventLog"></div>
+      </details>
+    </div>
+
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------------- State ----------------
+  // Hard capacity is FIXED at the HBase default, DEFAULT_CALL_QUEUE_SIZE_HARD_LIMIT
+  // (see RpcExecutor.java:59).
+  const HARD_CAP = 250;
+
+  const cfg = {
+    hardCap: HARD_CAP,
+    softLimit: 100,
+    codelTargetDelay: 5,
+    codelInterval: 100,
+    lifoThreshold: 0.8,
+    handlers: 30,
+
+    arrivalRate: 100,     // req/s
+    queueMode: 'codel',   // 'codel' (AdaptiveLifoCoDel) | 'fifo' (plain FIFO, no drops, no LIFO)
+    meanService: 10,      // ms
+    dist: 'poisson',
+    burstPeriod: 3000,
+    burstMult: 5,
+    burstDur: 800,
+
+    timeWarp: 1,          // real → sim time scale
+  };
+
+  const queue = [];       // array of {id, receiveTime, serviceTime}
+  const handlers = [];    // array of {busyUntil, current}
+  let nextReqId = 1;
+  let simNow = 0;
+  let running = false;
+  let lastFrame = 0;
+  let arrivalAccumulator = 0; // fractional arrivals (constant mode)
+  let nextPoissonAt = 0;
+
+  // CoDel state (mirrors AdaptiveLifoCoDelCallQueue.java)
+  let minDelay = 0;
+  let intervalTime = 0;
+  let resetDelay = true;  // equivalent of AtomicBoolean resetDelay
+  let isOverloaded = false;
+  let numGeneralCallsDropped = 0;
+  let numLifoModeSwitches = 0;
+  let currentMode = 'FIFO';
+
+  // Counters
+  let numArrived = 0;
+  let numServed = 0;
+  let numRejected = 0;  // offer() returned false (hard cap)
+
+  // Latency rolling window
+  const latencies = []; // last N wait times (ms)
+  const LATENCY_WINDOW = 1000;
+
+  // Time series buffers
+  const TS_WINDOW_MS = 30_000;
+  const TS_BUCKET_MS = 100;
+  const TS_BUCKETS = TS_WINDOW_MS / TS_BUCKET_MS;
+  const ts = {
+    queueSize: new Array(TS_BUCKETS).fill(0),
+    minDelay: new Array(TS_BUCKETS).fill(0),
+    drops: new Array(TS_BUCKETS).fill(0),     // drops per bucket
+    served: new Array(TS_BUCKETS).fill(0),    // served per bucket
+    lifoMask: new Array(TS_BUCKETS).fill(0),  // 1 if mode was LIFO during bucket
+    tsStart: 0,                               // simNow at the start of bucket 0
+    lastBucketIdx: 0,
+  };
+  let dropsThisBucket = 0;
+  let servedThisBucket = 0;
+
+  // Event log
+  const logEl = document.getElementById('eventLog');
+  function logEvent(msg, cls) {
+    const div = document.createElement('div');
+    div.className = cls || '';
+    div.textContent = `t=${(simNow/1000).toFixed(2)}s  ${msg}`;
+    logEl.appendChild(div);
+    while (logEl.children.length > 200) logEl.removeChild(logEl.firstChild);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  // ---------------- Queue logic (ports of Java) ----------------
+
+  // offer: returns true if accepted, false if queue full.
+  // Mirrors AdaptiveLifoCoDelCallQueue.offer (LinkedBlockingDeque#offer)
+  function offer(req) {
+    if (queue.length >= cfg.hardCap) return false;
+    queue.push(req);
+    return true;
+  }
+
+  // needToDrop: direct port of AdaptiveLifoCoDelCallQueue.needToDrop
+  function needToDrop(req) {
+    const now = simNow;
+    const callDelay = now - req.receiveTime;
+    const localMinDelay = minDelay;
+
+    // interval boundary check
+    if (now > intervalTime && !resetDelay) {
+      resetDelay = true;
+      intervalTime = now + cfg.codelInterval;
+      const newOverload = localMinDelay > cfg.codelTargetDelay;
+      if (newOverload !== isOverloaded) {
+        isOverloaded = newOverload;
+        if (newOverload) {
+          logEvent(`interval end  minDelay=${localMinDelay}ms > target=${cfg.codelTargetDelay}ms  →  OVERLOADED`, 'evt-overload');
+        } else {
+          logEvent(`interval end  minDelay=${localMinDelay}ms ≤ target=${cfg.codelTargetDelay}ms  →  recovered`, 'evt-recover');
+        }
+      } else {
+        isOverloaded = newOverload;
+      }
+    }
+
+    // reset-once-per-interval
+    if (resetDelay) {
+      resetDelay = false;
+      minDelay = callDelay;
+      return false;
+    } else if (callDelay < localMinDelay) {
+      minDelay = callDelay;
+    }
+
+    return isOverloaded && callDelay > 2 * cfg.codelTargetDelay;
+  }
+
+  // poll: port of AdaptiveLifoCoDelCallQueue.poll (non-blocking).
+  // In 'fifo' mode, skip LIFO switch and needToDrop — behave as a plain LinkedBlockingQueue.
+  function poll() {
+    if (cfg.queueMode === 'fifo') {
+      const cr = queue.shift();
+      if (cr === undefined) return null;
+      if (currentMode !== 'FIFO') {
+        logEvent(`queue mode → plain FIFO`, 'evt-mode');
+        currentMode = 'FIFO';
+      }
+      return cr;
+    }
+    let switched = false;
+    while (true) {
+      const size = queue.length;
+      const useLifo = cfg.softLimit > 0 && (size / cfg.softLimit) > cfg.lifoThreshold;
+      let cr;
+      const newMode = useLifo ? 'LIFO' : 'FIFO';
+      if (useLifo) {
+        if (!switched) {
+          switched = true;
+          numLifoModeSwitches++;
+        }
+        if (newMode !== currentMode) {
+          logEvent(`mode switch  FIFO → LIFO  (size=${size}, thr=${Math.floor(cfg.softLimit*cfg.lifoThreshold)})`, 'evt-mode');
+          currentMode = 'LIFO';
+        }
+        cr = queue.pop();
+      } else {
+        switched = false;
+        if (newMode !== currentMode) {
+          logEvent(`mode switch  LIFO → FIFO  (size=${size})`, 'evt-mode');
+          currentMode = 'FIFO';
+        }
+        cr = queue.shift();
+      }
+      if (cr === undefined) return null;
+      if (needToDrop(cr)) {
+        numGeneralCallsDropped++;
+        dropsThisBucket++;
+        cr.dropped = true;
+        // loop to pick next
+      } else {
+        return cr;
+      }
+    }
+  }
+
+  // ---------------- Traffic generator ----------------
+
+  function sampleExponential(meanMs) {
+    // Exponential sample, clipped to avoid extreme values
+    const u = Math.random();
+    return -meanMs * Math.log(1 - u);
+  }
+
+  // Current rate, taking burst into account
+  function currentArrivalRate() {
+    let base = cfg.arrivalRate;
+    if (cfg.dist === 'burst') {
+      const phase = simNow % cfg.burstPeriod;
+      if (phase < cfg.burstDur) base *= cfg.burstMult;
+    }
+    return base;
+  }
+
+  // Generate arrivals over the interval [prev, simNow]
+  function generateArrivals(dtMs) {
+    if (dtMs <= 0) return;
+    if (cfg.dist === 'constant' || cfg.dist === 'burst') {
+      const rate = currentArrivalRate();
+      arrivalAccumulator += (rate * dtMs) / 1000;
+      while (arrivalAccumulator >= 1) {
+        spawnRequest();
+        arrivalAccumulator -= 1;
+      }
+    } else {
+      // poisson: schedule next arrival from exponential
+      while (simNow >= nextPoissonAt) {
+        spawnRequest();
+        const rate = currentArrivalRate();
+        const meanGapMs = 1000 / Math.max(rate, 0.0001);
+        nextPoissonAt += sampleExponential(meanGapMs);
+        // safety: if rate is tiny and gap huge, break to avoid spinning
+        if (nextPoissonAt - simNow > 60_000) break;
+      }
+    }
+  }
+
+  function spawnRequest() {
+    numArrived++;
+    const req = {
+      id: nextReqId++,
+      receiveTime: simNow,
+      serviceTime: sampleExponential(cfg.meanService),
+      dropped: false,
+    };
+    if (!offer(req)) {
+      numRejected++;
+    }
+  }
+
+  // ---------------- Handlers ----------------
+
+  function ensureHandlerPool() {
+    while (handlers.length < cfg.handlers) handlers.push({ busyUntil: 0, current: null });
+    while (handlers.length > cfg.handlers) handlers.pop();
+  }
+
+  function stepHandlers() {
+    for (const h of handlers) {
+      if (h.busyUntil <= simNow) {
+        if (h.current) {
+          // finished serving previous
+          numServed++;
+          servedThisBucket++;
+          h.current = null;
+        }
+        // try to pick up new work
+        const cr = poll();
+        if (cr) {
+          const wait = simNow - cr.receiveTime;
+          latencies.push(wait);
+          if (latencies.length > LATENCY_WINDOW) latencies.shift();
+          h.current = cr;
+          h.busyUntil = simNow + cr.serviceTime;
+        }
+      }
+    }
+  }
+
+  // ---------------- Time series ----------------
+
+  function advanceTsBuckets() {
+    // How many buckets have elapsed since last sample?
+    const elapsedMs = simNow - ts.tsStart;
+    const currentBucket = Math.floor(elapsedMs / TS_BUCKET_MS);
+    if (currentBucket > ts.lastBucketIdx) {
+      const shift = currentBucket - ts.lastBucketIdx;
+      for (let i = 0; i < shift; i++) {
+        ts.queueSize.shift(); ts.queueSize.push(0);
+        ts.minDelay.shift(); ts.minDelay.push(0);
+        ts.drops.shift(); ts.drops.push(0);
+        ts.served.shift(); ts.served.push(0);
+        ts.lifoMask.shift(); ts.lifoMask.push(0);
+      }
+      // Commit previous-bucket counters into the most recently completed slot
+      ts.drops[TS_BUCKETS - 2] = dropsThisBucket;
+      ts.served[TS_BUCKETS - 2] = servedThisBucket;
+      dropsThisBucket = 0;
+      servedThisBucket = 0;
+      ts.tsStart += shift * TS_BUCKET_MS;
+      ts.lastBucketIdx = 0;
+    }
+    // Sample current-state into the latest bucket (overwriting is fine — last writer wins)
+    ts.queueSize[TS_BUCKETS - 1] = queue.length;
+    ts.minDelay[TS_BUCKETS - 1] = minDelay;
+    ts.lifoMask[TS_BUCKETS - 1] = (currentMode === 'LIFO') ? 1 : 0;
+  }
+
+  // ---------------- Simulation loop ----------------
+
+  function frame(tsReal) {
+    if (!running) { lastFrame = tsReal; return; }
+    const dtReal = tsReal - lastFrame;
+    lastFrame = tsReal;
+    // advance simulated time in small sub-steps so we don't miss events on big rAF gaps
+    let simDelta = cfg.timeWarp * Math.min(dtReal, 200); // cap to avoid big jumps when tab resumed
+    // Sub-step at most 1ms at a time so generator + handlers run at fine granularity.
+    // (This is in SIM ms, so slow time-warp values keep the sub-step cheap.)
+    const subStep = 1;
+    while (simDelta > 0) {
+      const step = Math.min(subStep, simDelta);
+      simNow += step;
+      generateArrivals(step);
+      stepHandlers();
+      simDelta -= step;
+    }
+    advanceTsBuckets();
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  // System capacity = handlers / mean-service-time.
+  // Each handler can serve ~1000/meanService req/sec.
+  function systemCapacity() {
+    if (cfg.meanService <= 0) return 0;
+    return cfg.handlers * (1000 / cfg.meanService);
+  }
+
+  // Rolling served/sec over the last ~2 seconds of sim time using the TS buckets.
+  function servedPerSec() {
+    const windowBuckets = Math.min(20, TS_BUCKETS); // 20 * 100ms = 2s
+    let sum = 0;
+    // last completed buckets, not the in-progress TS_BUCKETS-1
+    const start = Math.max(0, TS_BUCKETS - 1 - windowBuckets);
+    const end = TS_BUCKETS - 1;
+    for (let i = start; i < end; i++) sum += ts.served[i];
+    const windowSec = (end - start) * TS_BUCKET_MS / 1000;
+    if (windowSec <= 0) return 0;
+    return sum / windowSec;
+  }
+
+  // ---------------- Rendering ----------------
+
+  const qcv = document.getElementById('queueStripCanvas');
+  const qctx = qcv.getContext('2d');
+  const hcv = document.getElementById('handlerCanvas');
+  const hctx = hcv.getContext('2d');
+  const tcv = document.getElementById('tsCanvas');
+  const tctx = tcv.getContext('2d');
+
+  function resizeCanvas(c) {
+    const dpr = window.devicePixelRatio || 1;
+    const r = c.getBoundingClientRect();
+    if (c.width !== r.width * dpr || c.height !== r.height * dpr) {
+      c.width = r.width * dpr;
+      c.height = r.height * dpr;
+      c.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+  }
+
+  function colorForAge(age) {
+    const t = cfg.codelTargetDelay;
+    if (age < t) {
+      // green
+      const f = age / t;
+      return `rgb(${Math.floor(62 + f*100)}, ${Math.floor(207 - f*50)}, ${Math.floor(142 - f*60)})`;
+    } else if (age < 2*t) {
+      // yellow
+      return 'rgb(233, 196, 106)';
+    } else {
+      // red
+      return 'rgb(255, 90, 95)';
+    }
+  }
+
+  function renderQueueStrip() {
+    resizeCanvas(qcv);
+    const w = qcv.getBoundingClientRect().width;
+    const h = qcv.getBoundingClientRect().height;
+    qctx.clearRect(0, 0, w, h);
+
+    const hardCap = cfg.hardCap;
+    const size = queue.length;
+    const cellW = w / hardCap;
+
+    // Draw cells
+    for (let i = 0; i < size; i++) {
+      const req = queue[i];
+      const age = simNow - req.receiveTime;
+      qctx.fillStyle = colorForAge(age);
+      const x = i * cellW;
+      qctx.fillRect(x, 8, Math.max(cellW - 0.5, 1), h - 16);
+    }
+
+    // LIFO threshold line
+    const lifoIdx = cfg.softLimit * cfg.lifoThreshold;
+    const softIdx = cfg.softLimit;
+    qctx.setLineDash([4, 3]);
+    qctx.strokeStyle = 'rgba(176, 132, 255, 0.8)';
+    qctx.beginPath();
+    qctx.moveTo(lifoIdx * cellW, 0);
+    qctx.lineTo(lifoIdx * cellW, h);
+    qctx.stroke();
+    qctx.strokeStyle = 'rgba(74, 168, 255, 0.8)';
+    qctx.beginPath();
+    qctx.moveTo(softIdx * cellW, 0);
+    qctx.lineTo(softIdx * cellW, h);
+    qctx.stroke();
+    qctx.setLineDash([]);
+
+    // Labels
+    qctx.fillStyle = '#b084ff';
+    qctx.font = '10px -apple-system, sans-serif';
+    qctx.fillText(`lifo thr (${Math.floor(lifoIdx)})`, Math.min(lifoIdx*cellW + 4, w - 80), 12);
+    qctx.fillStyle = '#4aa8ff';
+    qctx.fillText(`soft (${softIdx})`, Math.min(softIdx*cellW + 4, w - 60), 12);
+  }
+
+  function renderHandlers() {
+    resizeCanvas(hcv);
+    const w = hcv.getBoundingClientRect().width;
+    const h = hcv.getBoundingClientRect().height;
+    hctx.clearRect(0, 0, w, h);
+    const n = handlers.length;
+    const cellW = w / n;
+    const radius = Math.min(cellW / 2 - 1, h / 2 - 4);
+    for (let i = 0; i < n; i++) {
+      const handler = handlers[i];
+      const busy = handler.busyUntil > simNow;
+      hctx.fillStyle = busy ? '#4aa8ff' : '#3ecf8e';
+      hctx.beginPath();
+      hctx.arc(i * cellW + cellW/2, h/2, Math.max(2, radius), 0, Math.PI*2);
+      hctx.fill();
+    }
+  }
+
+  function renderTimeSeries() {
+    resizeCanvas(tcv);
+    const w = tcv.getBoundingClientRect().width;
+    const h = tcv.getBoundingClientRect().height;
+    tctx.clearRect(0, 0, w, h);
+
+    const pad = { l: 42, r: 10, t: 10, b: 22 };
+    const pw = w - pad.l - pad.r;
+    const ph = h - pad.t - pad.b;
+    const n = TS_BUCKETS;
+
+    // Split chart vertically:
+    //   TOP  70% → queue size (left axis, 0..hardCap) + served/sec + drops/sec (right axis, 0..rateMax)
+    //   BOTTOM 30% → minDelay (ms) with target/2×target reference lines
+    const gap = 8;
+    const topH = Math.floor(ph * 0.68);
+    const botH = ph - topH - gap;
+    const topY = pad.t;
+    const botY = pad.t + topH + gap;
+
+    // Shared rate axis (served/sec & drops/sec)
+    const toPerSec = v => v / (TS_BUCKET_MS / 1000);
+    const servedRateSeries = ts.served.map(toPerSec);
+    const dropsRateSeries  = ts.drops.map(toPerSec);
+    const rateMax = Math.max(
+      systemCapacity() * 1.1,
+      ...servedRateSeries,
+      ...dropsRateSeries,
+      1
+    );
+
+    // minDelay axis (only used in bottom subplot)
+    const maxDelayAxis = Math.max(cfg.codelTargetDelay * 3, 20, Math.max(...ts.minDelay));
+
+    // Background LIFO bands across both subplots
+    tctx.fillStyle = 'rgba(255, 90, 95, 0.1)';
+    for (let i = 0; i < n; i++) {
+      if (ts.lifoMask[i]) {
+        const x = pad.l + (i / (n-1)) * pw;
+        const x2 = pad.l + ((i+1) / (n-1)) * pw;
+        tctx.fillRect(x, topY, x2 - x, topH);
+        tctx.fillRect(x, botY, x2 - x, botH);
+      }
+    }
+
+    // Subplot frames
+    tctx.strokeStyle = '#2a2f3a';
+    tctx.lineWidth = 1;
+    tctx.strokeRect(pad.l, topY, pw, topH);
+    tctx.strokeRect(pad.l, botY, pw, botH);
+
+    // ---- TOP subplot axes ----
+    tctx.fillStyle = '#8b92a0';
+    tctx.font = '10px -apple-system, sans-serif';
+    // Left axis: queue size ticks (0..hardCap)
+    tctx.textAlign = 'right';
+    for (let i = 0; i <= 4; i++) {
+      const y = topY + (topH * i / 4);
+      const qv = Math.round(cfg.hardCap * (1 - i/4));
+      tctx.fillText(qv, pad.l - 4, y + 3);
+    }
+    // Right axis: rate ticks (0..rateMax, req/s)
+    tctx.textAlign = 'left';
+    for (let i = 0; i <= 4; i++) {
+      const y = topY + (topH * i / 4);
+      const rv = Math.round(rateMax * (1 - i/4));
+      tctx.fillText(rv + '/s', pad.l + pw + 4, y + 3);
+    }
+
+    // ---- BOTTOM subplot axes ----
+    tctx.textAlign = 'right';
+    for (let i = 0; i <= 2; i++) {
+      const y = botY + (botH * i / 2);
+      const dv = Math.round(maxDelayAxis * (1 - i/2));
+      tctx.fillText(dv + 'ms', pad.l - 4, y + 3);
+    }
+
+    // X-axis time labels (across the bottom)
+    tctx.textAlign = 'center';
+    for (let i = 0; i <= 5; i++) {
+      const x = pad.l + (pw * i / 5);
+      const sAgo = Math.round(TS_WINDOW_MS/1000 * (1 - i/5));
+      tctx.fillText(`-${sAgo}s`, x, pad.t + ph + 14);
+    }
+
+    // ---- TOP subplot: queue size ----
+    tctx.strokeStyle = '#4aa8ff';
+    tctx.lineWidth = 1.5;
+    tctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = pad.l + (i / (n-1)) * pw;
+      const y = topY + topH * (1 - ts.queueSize[i] / cfg.hardCap);
+      if (i === 0) tctx.moveTo(x, y); else tctx.lineTo(x, y);
+    }
+    tctx.stroke();
+
+    // ---- TOP subplot: served/sec line ----
+    tctx.strokeStyle = '#3ecf8e';
+    tctx.lineWidth = 1.5;
+    tctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = pad.l + (i / (n-1)) * pw;
+      const y = topY + topH * (1 - servedRateSeries[i] / rateMax);
+      if (i === 0) tctx.moveTo(x, y); else tctx.lineTo(x, y);
+    }
+    tctx.stroke();
+
+    // ---- TOP subplot: drops/sec line (SAME axis as served/sec) ----
+    tctx.strokeStyle = '#ff5a5f';
+    tctx.lineWidth = 1.5;
+    tctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = pad.l + (i / (n-1)) * pw;
+      const y = topY + topH * (1 - dropsRateSeries[i] / rateMax);
+      if (i === 0) tctx.moveTo(x, y); else tctx.lineTo(x, y);
+    }
+    tctx.stroke();
+
+    // ---- TOP subplot: capacity reference line ----
+    const capY = topY + topH * (1 - systemCapacity() / rateMax);
+    tctx.strokeStyle = 'rgba(62, 207, 142, 0.5)';
+    tctx.setLineDash([2, 4]);
+    tctx.beginPath();
+    tctx.moveTo(pad.l, capY); tctx.lineTo(pad.l + pw, capY); tctx.stroke();
+    tctx.setLineDash([]);
+    tctx.fillStyle = 'rgba(62, 207, 142, 0.8)';
+    tctx.textAlign = 'left';
+    tctx.fillText(`cap ${Math.round(systemCapacity())}/s`, pad.l + 4, capY - 3);
+
+    // ---- BOTTOM subplot: target & 2×target reference lines ----
+    const targetY = botY + botH * (1 - cfg.codelTargetDelay / maxDelayAxis);
+    const target2Y = botY + botH * (1 - (2*cfg.codelTargetDelay) / maxDelayAxis);
+    tctx.strokeStyle = '#555';
+    tctx.setLineDash([3, 3]);
+    tctx.beginPath();
+    tctx.moveTo(pad.l, targetY); tctx.lineTo(pad.l + pw, targetY); tctx.stroke();
+    tctx.strokeStyle = '#888';
+    tctx.beginPath();
+    tctx.moveTo(pad.l, target2Y); tctx.lineTo(pad.l + pw, target2Y); tctx.stroke();
+    tctx.setLineDash([]);
+    tctx.fillStyle = '#666';
+    tctx.textAlign = 'left';
+    tctx.fillText(`target ${cfg.codelTargetDelay}ms`, pad.l + 4, targetY - 2);
+    tctx.fillText(`2×target ${2*cfg.codelTargetDelay}ms`, pad.l + 4, target2Y - 2);
+
+    // ---- BOTTOM subplot: minDelay line ----
+    tctx.strokeStyle = '#e9c46a';
+    tctx.lineWidth = 1.5;
+    tctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = pad.l + (i / (n-1)) * pw;
+      const y = botY + botH * (1 - Math.min(ts.minDelay[i], maxDelayAxis) / maxDelayAxis);
+      if (i === 0) tctx.moveTo(x, y); else tctx.lineTo(x, y);
+    }
+    tctx.stroke();
+  }
+
+  function percentile(arr, p) {
+    if (!arr.length) return 0;
+    const sorted = [...arr].sort((a,b) => a-b);
+    const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * p));
+    return sorted[idx];
+  }
+
+  function render() {
+    renderQueueStrip();
+    renderHandlers();
+    renderTimeSeries();
+
+    // Labels
+    setText('lblSize', queue.length);
+    setText('lblHardCap', cfg.hardCap);
+    setText('lblMode', currentMode);
+    setText('lblOverload', isOverloaded ? 'OVERLOADED' : 'NORMAL');
+    setText('lblMinDelay', Math.round(minDelay));
+    setText('lblSimTime', (simNow/1000).toFixed(1));
+
+    const chipMode = document.getElementById('chipMode');
+    chipMode.classList.toggle('mode-fifo', currentMode === 'FIFO');
+    chipMode.classList.toggle('mode-lifo', currentMode === 'LIFO');
+    const chipOv = document.getElementById('chipOverload');
+    chipOv.classList.toggle('overload-yes', isOverloaded);
+    chipOv.classList.toggle('overload-no', !isOverloaded);
+
+    setText('cntArrived', numArrived);
+    setText('cntServed', numServed);
+    const sps = servedPerSec();
+    setText('cntServedRate', Math.round(sps));
+    const cap = systemCapacity();
+    setText('cntCapacity', Math.round(cap));
+    const arrRate = currentArrivalRate();
+    if (cap > 0) {
+      const load = arrRate / cap;
+      const el = document.getElementById('cntLoad');
+      el.textContent = load.toFixed(2);
+      el.classList.remove('green', 'yellow', 'red');
+      el.classList.add(load < 0.8 ? 'green' : (load < 1.0 ? 'yellow' : 'red'));
+    }
+    setText('cntDropped', numGeneralCallsDropped);
+    setText('cntRejected', numRejected);
+    setText('cntInQueue', queue.length);
+    setText('cntLifo', numLifoModeSwitches);
+    setText('cntP50', Math.round(percentile(latencies, 0.5)));
+    setText('cntP95', Math.round(percentile(latencies, 0.95)));
+    setText('cntP99', Math.round(percentile(latencies, 0.99)));
+  }
+
+  function setText(id, v) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = v;
+  }
+
+  // ---------------- Wiring controls ----------------
+
+  function bindSlider(cid, vid, key, parser, fmt) {
+    const input = document.getElementById(cid);
+    const label = document.getElementById(vid);
+    const update = () => {
+      cfg[key] = parser(input.value);
+      label.textContent = fmt ? fmt(cfg[key]) : cfg[key];
+      if (key === 'handlers') ensureHandlerPool();
+      // Re-render immediately so derived labels (capacity, load, threshold markers,
+      // axis tick values) update as the slider moves, even when paused.
+      render();
+    };
+    input.addEventListener('input', update);
+    update();
+  }
+
+  // Hard capacity is fixed; just render the label.
+  document.getElementById('vHardCap').textContent = HARD_CAP;
+  document.getElementById('lblHardCap').textContent = HARD_CAP;
+
+  bindSlider('cSoftLimit', 'vSoftLimit', 'softLimit', parseInt);
+  bindSlider('cTarget', 'vTarget', 'codelTargetDelay', parseInt);
+  bindSlider('cInterval', 'vInterval', 'codelInterval', parseInt);
+  bindSlider('cLifo', 'vLifo', 'lifoThreshold', parseFloat, v => v.toFixed(2));
+  bindSlider('cHandlers', 'vHandlers', 'handlers', parseInt);
+  bindSlider('cRate', 'vRate', 'arrivalRate', parseInt);
+  bindSlider('cService', 'vService', 'meanService', parseInt);
+  bindSlider('cBurstPeriod', 'vBurstPeriod', 'burstPeriod', parseInt);
+  bindSlider('cBurstMult', 'vBurstMult', 'burstMult', parseInt);
+  bindSlider('cBurstDur', 'vBurstDur', 'burstDur', parseInt);
+
+  document.querySelectorAll('input[name=dist]').forEach(r => {
+    r.addEventListener('change', () => {
+      cfg.dist = document.querySelector('input[name=dist]:checked').value;
+      document.getElementById('burstConfig').style.display = cfg.dist === 'burst' ? 'block' : 'none';
+      // reset poisson scheduler
+      nextPoissonAt = simNow;
+      arrivalAccumulator = 0;
+    });
+  });
+
+  document.querySelectorAll('input[name=qtype]').forEach(r => {
+    r.addEventListener('change', () => {
+      cfg.queueMode = document.querySelector('input[name=qtype]:checked').value;
+      if (cfg.queueMode === 'fifo') {
+        // Clear CoDel state so re-enabling doesn't fire on stale values.
+        isOverloaded = false;
+        minDelay = 0;
+        resetDelay = true;
+        currentMode = 'FIFO';
+        logEvent('queue mode → plain FIFO (CoDel disabled)', 'evt-mode');
+      } else {
+        logEvent('queue mode → CoDel + Adaptive LIFO', 'evt-mode');
+      }
+      render();
+    });
+  });
+
+  document.getElementById('timewarp').querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById('timewarp').querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      cfg.timeWarp = parseFloat(btn.dataset.warp);
+    });
+  });
+
+  document.getElementById('btnStart').addEventListener('click', () => {
+    if (!running) {
+      running = true;
+      lastFrame = performance.now();
+      if (nextPoissonAt < simNow) nextPoissonAt = simNow;
+      requestAnimationFrame(frame);
+    }
+  });
+  document.getElementById('btnPause').addEventListener('click', () => { running = false; });
+  document.getElementById('btnReset').addEventListener('click', () => {
+    running = false;
+    queue.length = 0;
+    handlers.length = 0;
+    ensureHandlerPool();
+    nextReqId = 1;
+    simNow = 0;
+    arrivalAccumulator = 0;
+    nextPoissonAt = 0;
+    minDelay = 0;
+    intervalTime = 0;
+    resetDelay = true;
+    isOverloaded = false;
+    numGeneralCallsDropped = 0;
+    numLifoModeSwitches = 0;
+    numArrived = 0;
+    numServed = 0;
+    numRejected = 0;
+    currentMode = 'FIFO';
+    latencies.length = 0;
+    ts.queueSize.fill(0);
+    ts.minDelay.fill(0);
+    ts.drops.fill(0);
+    ts.served.fill(0);
+    ts.lifoMask.fill(0);
+    ts.tsStart = 0;
+    ts.lastBucketIdx = 0;
+    dropsThisBucket = 0;
+    servedThisBucket = 0;
+    logEl.innerHTML = '';
+    render();
+  });
+
+  // ---------------- Init ----------------
+  ensureHandlerPool();
+  render();
+
+})();
+</script>
+</body>
+</html>
