@@ -18,6 +18,7 @@
 package org.apache.hadoop.hbase.util;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -32,6 +33,7 @@ import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.net.Address;
+import org.apache.hadoop.hbase.regionserver.HRegion;
 import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.hbase.rsgroup.RSGroupInfo;
 import org.apache.hadoop.hbase.rsgroup.RSGroupUtil;
@@ -39,6 +41,7 @@ import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.MiscTests;
 import org.apache.hadoop.hbase.util.RegionMover.RegionMoverBuilder;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -47,8 +50,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Test for rsgroup enable, unloaded regions from decommissoned host of a rsgroup should be assigned
- * to those regionservers belonging to the same rsgroup.
+ * Tests that RegionMover.unloadRegions() respects RSGroup membership: regions decommissioned from a
+ * server in a non-default RSGroup must land only on other servers in the same group, not on servers
+ * in unrelated groups.
  */
 @Tag(MiscTests.TAG)
 @Tag(MediumTests.TAG)
@@ -57,6 +61,7 @@ public class TestRegionMoverWithRSGroupEnable {
   private static final Logger LOG = LoggerFactory.getLogger(TestRegionMoverWithRSGroupEnable.class);
   private static final HBaseTestingUtil TEST_UTIL = new HBaseTestingUtil();
   private static final String TEST_RSGROUP = "test";
+  private static final TableName TABLE_NAME = TableName.valueOf("testRegionMoverWithRSGroupEnable");
 
   @BeforeAll
   public static void setUpBeforeClass() throws Exception {
@@ -69,21 +74,32 @@ public class TestRegionMoverWithRSGroupEnable {
     TEST_UTIL.shutdownMiniCluster();
   }
 
+  // Addresses of the two servers placed in TEST_RSGROUP each test.
   private final List<Address> rsservers = new ArrayList<>(2);
+  // Servers that remain in the default group (excludes meta RS).
+  private final List<ServerName> defaultGroupServers = new ArrayList<>();
 
   @BeforeEach
   public void setUp() throws Exception {
     Admin admin = TEST_UTIL.getAdmin();
-
-    // Add a new rsgroup and assign two servers to it.
-    admin.addRSGroup(TEST_RSGROUP);
+    if (admin.getRSGroup(TEST_RSGROUP) == null) {
+      admin.addRSGroup(TEST_RSGROUP);
+    }
     Collection<ServerName> allServers = admin.getRegionServers();
-    // Remove rs contains hbase:meta, otherwise test looks unstable and buggy in test env.
+
+    // Exclude the RS that hosts hbase:meta to keep the test stable.
     ServerName rsContainMeta = TEST_UTIL.getMiniHBaseCluster().getRegionServerThreads().stream()
       .map(t -> t.getRegionServer())
       .filter(rs -> rs.getRegions(TableName.META_TABLE_NAME).size() > 0).findFirst().get()
       .getServerName();
-    LOG.info("{} contains hbase:meta", rsContainMeta);
+    LOG.info("{} contains hbase:meta, keeping in default group", rsContainMeta);
+
+    // Move any leftover servers back to default before setting up fresh assignments.
+    RSGroupInfo existingGroup = admin.getRSGroup(TEST_RSGROUP);
+    if (existingGroup != null && !existingGroup.getServers().isEmpty()) {
+      admin.moveServersToRSGroup(existingGroup.getServers(), RSGroupInfo.DEFAULT_GROUP);
+    }
+
     List<ServerName> modifiable = new ArrayList<>(allServers);
     modifiable.remove(rsContainMeta);
     int i = 0;
@@ -93,38 +109,131 @@ public class TestRegionMoverWithRSGroupEnable {
       i++;
     }
     admin.moveServersToRSGroup(new HashSet<>(rsservers), TEST_RSGROUP);
-    LOG.info("Servers in {} are {}", TEST_RSGROUP, rsservers);
+    LOG.info("Servers moved to {} group: {}", TEST_RSGROUP, rsservers);
     assertEquals(3, admin.getRSGroup(RSGroupInfo.DEFAULT_GROUP).getServers().size());
     assertEquals(2, admin.getRSGroup(TEST_RSGROUP).getServers().size());
 
-    // Create a pre-split table in test rsgroup
-    TableName tableName = TableName.valueOf("testRegionMoverWithRSGroupEnable");
-    if (admin.tableExists(tableName)) {
-      TEST_UTIL.deleteTable(tableName);
+    // Record the three default-group servers (used for isolation assertions).
+    for (ServerName sn : allServers) {
+      if (!rsservers.contains(sn.getAddress())) {
+        defaultGroupServers.add(sn);
+      }
     }
-    TableDescriptor tableDesc = TableDescriptorBuilder.newBuilder(tableName)
+
+    if (admin.tableExists(TABLE_NAME)) {
+      TEST_UTIL.deleteTable(TABLE_NAME);
+    }
+    TableDescriptor tableDesc = TableDescriptorBuilder.newBuilder(TABLE_NAME)
       .setColumnFamily(ColumnFamilyDescriptorBuilder.of("f")).setRegionServerGroup(TEST_RSGROUP)
       .build();
-    String startKey = "a";
-    String endKey = "z";
-    admin.createTable(tableDesc, Bytes.toBytes(startKey), Bytes.toBytes(endKey), 9);
+    admin.createTable(tableDesc, Bytes.toBytes("a"), Bytes.toBytes("z"), 9);
+    TEST_UTIL.waitTableAvailable(TABLE_NAME);
   }
 
+  @AfterEach
+  public void tearDown() throws Exception {
+    Admin admin = TEST_UTIL.getAdmin();
+    if (admin.tableExists(TABLE_NAME)) {
+      TEST_UTIL.deleteTable(TABLE_NAME);
+    }
+    if (!rsservers.isEmpty()) {
+      admin.moveServersToRSGroup(new HashSet<>(rsservers), RSGroupInfo.DEFAULT_GROUP);
+    }
+    if (admin.getRSGroup(TEST_RSGROUP) != null) {
+      admin.removeRSGroup(TEST_RSGROUP);
+    }
+    rsservers.clear();
+    defaultGroupServers.clear();
+  }
+
+  /**
+   * Unloading a server in a non-default RSGroup must move all regions to the remaining server in
+   * that group — and must not move any region to a server in the default group.
+   */
   @Test
-  public void testUnloadRegions() throws Exception {
+  public void testUnloadRegionsRespectsRSGroup() throws Exception {
     Address decommission = rsservers.get(0);
     Address online = rsservers.get(1);
     String filename = new Path(TEST_UTIL.getDataTestDir(), "testRSGroupUnload").toString();
     RegionMoverBuilder builder =
       new RegionMoverBuilder(decommission.toString(), TEST_UTIL.getConfiguration());
     try (RegionMover rm = builder.filename(filename).ack(true).build()) {
-      LOG.info("Unloading " + decommission.getHostname());
+      LOG.info("Unloading {}", decommission.getHostname());
       rm.unload();
     }
+
     HRegionServer onlineRS = TEST_UTIL.getMiniHBaseCluster().getRegionServerThreads().stream()
       .map(JVMClusterUtil.RegionServerThread::getRegionServer)
       .filter(rs -> rs.getServerName().getAddress().equals(online)).findFirst().get();
-    assertEquals(9, onlineRS.getNumberOfOnlineRegions());
+
+    // Positive assertion: all 9 regions landed on the one remaining test-group server.
+    assertEquals(9, onlineRS.getNumberOfOnlineRegions(),
+      "All 9 regions must be on the single remaining server in the test RSGroup");
+
+    // Isolation assertion: no default-group server must have received any of the table's regions.
+    for (ServerName defaultSN : defaultGroupServers) {
+      HRegionServer defaultRS = TEST_UTIL.getMiniHBaseCluster().getRegionServerThreads().stream()
+        .map(JVMClusterUtil.RegionServerThread::getRegionServer)
+        .filter(rs -> rs.getServerName().equals(defaultSN)).findFirst().orElse(null);
+      if (defaultRS == null) continue;
+      List<HRegion> tableRegions = defaultRS.getRegions(TABLE_NAME);
+      assertTrue(tableRegions.isEmpty(), "Default-group server " + defaultSN
+        + " must not hold any regions of " + TABLE_NAME + " but had: " + tableRegions);
+    }
   }
 
+  /**
+   * Unloading a server that is in the default RSGroup must still succeed end-to-end when RSGroups
+   * are enabled. The server's regions should be spread across all available default-group servers.
+   */
+  @Test
+  public void testUnloadDefaultGroupServerWithRSGroupEnabled() throws Exception {
+    ServerName defaultSN = defaultGroupServers.get(0);
+    Address decommission = defaultSN.getAddress();
+    String filename = new Path(TEST_UTIL.getDataTestDir(), "testDefaultGroupUnload").toString();
+
+    // Create a table in the default group; the balancer distributes its 6 regions naturally
+    // across the 3 default-group servers, so defaultSN will hold at least some.
+    TableName defaultTable = TableName.valueOf("testDefaultGroupTable");
+    Admin admin = TEST_UTIL.getAdmin();
+    if (admin.tableExists(defaultTable)) {
+      TEST_UTIL.deleteTable(defaultTable);
+    }
+    try {
+      TableDescriptor td = TableDescriptorBuilder.newBuilder(defaultTable)
+        .setColumnFamily(ColumnFamilyDescriptorBuilder.of("f")).build();
+      admin.createTable(td, Bytes.toBytes("a"), Bytes.toBytes("z"), 6);
+      TEST_UTIL.waitTableAvailable(defaultTable);
+
+      RegionMoverBuilder builder =
+        new RegionMoverBuilder(decommission.toString(), TEST_UTIL.getConfiguration());
+      try (RegionMover rm = builder.filename(filename).ack(true).build()) {
+        LOG.info("Unloading default-group server {}", decommission.getHostname());
+        rm.unload();
+      }
+
+      // After unload, the decommissioned server must hold no regions of the default table.
+      HRegionServer decommRS = TEST_UTIL.getMiniHBaseCluster().getRegionServerThreads().stream()
+        .map(JVMClusterUtil.RegionServerThread::getRegionServer)
+        .filter(rs -> rs.getServerName().equals(defaultSN)).findFirst().get();
+      assertEquals(0, decommRS.getRegions(defaultTable).size(),
+        "Decommissioned default-group server must hold no regions after unload");
+
+      // Isolation assertion: no test-group server must hold any region of the default table.
+      for (JVMClusterUtil.RegionServerThread rst : TEST_UTIL.getMiniHBaseCluster()
+        .getRegionServerThreads()) {
+        HRegionServer rs = rst.getRegionServer();
+        Address addr = rs.getServerName().getAddress();
+        if (rsservers.contains(addr)) {
+          List<HRegion> found = rs.getRegions(defaultTable);
+          assertTrue(found.isEmpty(), "Test-group server " + addr + " must not hold any region of "
+            + defaultTable + " but had: " + found);
+        }
+      }
+    } finally {
+      if (admin.tableExists(defaultTable)) {
+        TEST_UTIL.deleteTable(defaultTable);
+      }
+    }
+  }
 }
